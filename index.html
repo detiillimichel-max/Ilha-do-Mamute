@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dino Runner Clone - Mammoth Evolution</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background: #f7f7f7;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+            touch-action: manipulation; 
+        }
+        #gameCanvas {
+            background: #fff;
+            border-bottom: 2px solid #535353;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+            max-width: 100%;
+            height: auto;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="gameCanvas" width="800" height="250"></canvas>
+
+<script>
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+
+// Carrega a folha de sprites contendo os 4 mamutes que você enviou
+const spritesheet = new Image();
+// Imagem contendo as 4 variações combinadas lado a lado em proporções equivalentes
+spritesheet.src = "https://ibb.co"; 
+
+// Mapeamento de recorte para cada uma das 4 fases dentro da imagem combinada
+const mammothFases = [
+    { sx: 0, sy: 0, sWidth: 200, sHeight: 200 },    // Fase 1: Mamute com flocos brancos
+    { sx: 215, sy: 0, sWidth: 200, sHeight: 200 },  // Fase 2: Mamute realista na neve
+    { sx: 428, sy: 0, sWidth: 200, sHeight: 200 },  // Fase 3: Mamute realista com poeira
+    { sx: 640, sy: 0, sWidth: 200, sHeight: 200 }   // Fase 4: Mamute estilo cartoon
+];
+
+// Lista de obstáculos fornecida por você
+const obstacleEmojis = [
+    "🦛","🦒","🦍","🐒","🐆","🐪","🐫","🐦","🐓","🐔",
+    "🐣","🐤","🐥","  ","🦆","🦢","🦤","🦜","🦉","🦅",
+    "🌱","☘️","🍀","🪴","🌵","🌴","🌵","🔥","⚡","☀️"
+];
+
+let audioCtx = null;
+
+function initAudio() {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+}
+
+function playSound(type) {
+    if (!audioCtx) return;
+    
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    if (type === 'jump') {
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(400, audioCtx.currentTime + 0.1);
+        gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.1);
+    } else if (type === 'score') {
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(600, audioCtx.currentTime);
+        osc.frequency.setValueAtTime(800, audioCtx.currentTime + 0.08);
+        gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.2);
+    } else if (type === 'hit') {
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(120, audioCtx.currentTime);
+        osc.frequency.linearRampToValueAtTime(40, audioCtx.currentTime + 0.3);
+        gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.3);
+    }
+}
+
+// Configurações do Jogo
+let score = 0;
+let highScore = localStorage.getItem("dinoHighScore") ? parseInt(localStorage.getItem("dinoHighScore")) : 0;
+let gameOver = false;
+let gameSpeed = 5;
+let lives = 3; 
+let invulnerableFrames = 0; 
+let currentPhase = 1;
+
+// Configurações do Personagem Principal (Dimensões na tela)
+const dino = {
+    x: 50,
+    y: 165,
+    width: 65,
+    height: 55,
+    vy: 0,
+    gravity: 0.6,
+    jumpForce: -13, 
+    isJumping: false
+};
+
+// Configurações dos Obstáculos
+const obstacles = [];
+const obstacleConfig = {
+    width: 55,
+    height: 55,
+    minInterval: 70,
+    nextInterval: 90
+};
+let frameCount = 0;
+
+function handleAction() {
+    initAudio();
+    
+    if (!dino.isJumping && !gameOver) {
+        dino.vy = dino.jumpForce;
+        dino.isJumping = true;
+        playSound('jump');
+    }
+    if (gameOver) {
+        resetGame();
+    }
+}
+
+window.addEventListener("keydown", (e) => {
+    if (e.code === "Space" || e.code === "ArrowUp") {
+        e.preventDefault();
+        handleAction();
+    }
+});
+
+window.addEventListener("touchstart", (e) => {
+    e.preventDefault();
+    handleAction();
+}, { passive: false });
+
+function spawnObstacle() {
+    frameCount++;
+    if (frameCount > obstacleConfig.nextInterval) {
+        const randomEmoji = obstacleEmojis[Math.floor(Math.random() * obstacleEmojis.length)];
+        
+        obstacles.push({
+            x: canvas.width,
+            y: canvas.height - obstacleConfig.height,
+            width: obstacleConfig.width,
+            height: obstacleConfig.height,
+            emoji: randomEmoji
+        });
+        frameCount = 0;
+        obstacleConfig.nextInterval = Math.floor(Math.random() * 50) + obstacleConfig.minInterval;
+    }
+}
+
+function update() {
+    if (gameOver) return;
+
+    if (invulnerableFrames > 0) {
+        invulnerableFrames--;
+    }
+
+    // Gerenciador de fases baseado na pontuação (Teto máximo: Fase 4)
+    currentPhase = Math.min(Math.floor(score / 10) + 1, 4);
+
+    dino.vy += dino.gravity;
+    dino.y += dino.vy;
+
+    const groundY = canvas.height - dino.height;
+    if (dino.y > groundY) {
+        dino.y = groundY;
+        dino.vy = 0;
+        dino.isJumping = false;
+    }
+
+    for (let i = obstacles.length - 1; i >= 0; i--) {
+        obstacles[i].x -= gameSpeed;
+
+        // Controle de colisão por Hitbox adaptada
+        if (
+            invulnerableFrames === 0 &&
+            dino.x + 12 < obstacles[i].x + obstacles[i].width &&
+            dino.x + dino.width - 12 > obstacles[i].x &&
+            dino.y + 10 < obstacles[i].y + obstacles[i].height &&
+            dino.y + dino.height > obstacles[i].y
+        ) {
+            playSound('hit');
+            lives--; 
+            
+            if (lives <= 0) {
+                gameOver = true;
+                if (score > highScore) {
+                    highScore = score;
+                    localStorage.setItem("dinoHighScore", highScore);
+                }
+            } else {
+                invulnerableFrames = 90; 
+            }
+        }
+
+        if (!gameOver && obstacles[i].x + obstacles[i].width < 0) {
+            obstacles.splice(i, 1);
+            score++;
+            playSound('score');
+            
+            if (score % 5 === 0) gameSpeed += 0.5;
+        }
+    }
+
+    spawnObstacle();
+}
+
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Linha de delimitação de solo
+    ctx.strokeStyle = "#535353";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, canvas.height);
+    ctx.lineTo(canvas.width, canvas.height);
+    ctx.stroke();
+
+    // RENDERIZAÇÃO DA EVOLUÇÃO DO MAMUTE
+    if (invulnerableFrames === 0 || Math.floor(invulnerableFrames / 5) % 2 === 0) {
+        if (spritesheet.complete) {
+            // Seleciona as coordenadas correspondentes ao mamute da fase atual
+            const sprite = mammothFases[currentPhase - 1];
+            
+            // Recorta o quadrante correto da imagem original e renderiza na tela
+            ctx.drawImage(
+                spritesheet, 
+                sprite.sx, sprite.sy, sprite.sWidth, sprite.sHeight, // Coordenadas do recorte
+                dino.x, dino.y, dino.width, dino.height             // Onde desenha no jogo
+            );
+        } else {
+            // Placeholder visual rápido caso a conexão caia
+            ctx.fillStyle = "#8d6e63";
+            ctx.fillRect(dino.x, dino.y, dino.width, dino.height);
+        }
+    }
+
+    // Desenha os Obstáculos
+    ctx.textBaseline = "top";
+    ctx.textAlign = "left";
+    for (let obs of obstacles) {
+        ctx.font = `${obs.height}px Arial`;
+        ctx.fillText(obs.emoji, obs.x, obs.y);
+    }
+
+    // Desenha o marcador de Vidas
+    ctx.textAlign = "left";
+    ctx.font = "22px Arial";
+    let hearts = "";
+    for(let i = 0; i < lives; i++) hearts += "❤️";
+    ctx.fillText(hearts, 20, 20);
+
+    // Painel Superior Direito (Status)
+    ctx.fillStyle = "#535353";
+    ctx.font = "16px Arial";
+    ctx.textAlign = "right";
+    ctx.fillText(`MAMUTE FASE: ${currentPhase}   HI: ${highScore}   Score: ${score}`, canvas.width - 20, 25);
+
+    // Janela Suspensa de Término
+    if (gameOver) {
+        ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        ctx.fillStyle = "#fff";
+        ctx.font = "30px Arial";
+        ctx.textAlign = "center";
+        ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2 - 10);
+        ctx.font = "18px Arial";
+        ctx.fillText("Toque na tela ou Espaço para reiniciar", canvas.width / 2, canvas.height / 2 + 25);
+    }
+}
+
+function resetGame() {
+    score = 0;
+    lives = 3; 
+    gameOver = false;
+    gameSpeed = 5;
+    obstacles.length = 0;
+    currentPhase = 1;
+    dino.y = canvas.height - dino.height;
+    dino.vy = 0;
+    frameCount = 0;
+    invulnerableFrames = 0;
+    loop();
+}
+
+function loop() {
+    update();
+    draw();
+    if (!gameOver) {
+        requestAnimationFrame(loop);
+    }
+}
+
+loop();
+</script>
+</body>
+</html>
