@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ilha do Mamute</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background: #e0e0e0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+            touch-action: manipulation; 
+        }
+        #gameCanvas {
+            box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+            max-width: 100%;
+            height: auto;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="gameCanvas" width="800" height="250"></canvas>
+
+<script>
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+
+// Link 100% seguro e direto para a imagem dos 4 mamutes
+const spritesheet = new Image();
+spritesheet.crossOrigin = "anonymous"; 
+spritesheet.src = "https://imgur.com"; 
+
+// Coordenadas exatas das 4 variações de mamute na imagem
+const mammothFases = [
+    { sx: 0, sy: 0, sWidth: 200, sHeight: 200 },    
+    { sx: 215, sy: 0, sWidth: 200, sHeight: 200 },  
+    { sx: 428, sy: 0, sWidth: 200, sHeight: 200 },  
+    { sx: 640, sy: 0, sWidth: 200, sHeight: 200 }   
+];
+
+// Cores de fundo para cada fase da Ilha
+const faseBackgrounds = {
+    1: "#e3f2fd", // Azul gelo claro
+    2: "#fff9c4", // Entardecer amarelado
+    3: "#ffcc80", // Deserto alaranjado
+    4: "#b2dfdb"  // Selva esverdeada
+};
+
+// Lista de obstáculos (fauna, flora e clima da ilha)
+const obstacleEmojis = [
+    "🦛","🦒","🦍","🐒","🐆","🐪","🐫","🐦","🐓","🐔",
+    "🐣","🐤","🐥","  ","🦆","🦢","🦤","🦜","🦉","🦅",
+    "🌱","☘️","🍀","🪴","🌵","🌴","🌵","🔥","⚡","☀️"
+];
+
+// Variáveis de ambiente das nuvens de fundo
+const clouds = [
+    { x: 100, y: 30, speed: 0.2, size: 40 },
+    { x: 400, y: 60, speed: 0.4, size: 60 },
+    { x: 700, y: 20, speed: 0.3, size: 50 }
+];
+
+let audioCtx = null;
+let score = 0;
+let highScore = localStorage.getItem("dinoHighScore") ? parseInt(localStorage.getItem("dinoHighScore")) : 0;
+let gameOver = false;
+let gameSpeed = 5;
+let lives = 3; 
+let invulnerableFrames = 0; 
+let currentPhase = 1;
+
+const dino = {
+    x: 50,
+    y: 165,
+    width: 65,
+    height: 55,
+    vy: 0,
+    gravity: 0.6,
+    jumpForce: -13, 
+    isJumping: false
+};
+
+const obstacles = [];
+const obstacleConfig = {
+    width: 55,
+    height: 55,
+    minInterval: 70,
+    nextInterval: 90
+};
+let frameCount = 0;
+
+function initAudio() {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+}
+
+function playSound(type) {
+    if (!audioCtx) return;
+    try {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        if (type === 'jump') {
+            osc.type = 'square';
+            osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(400, audioCtx.currentTime + 0.1);
+            gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.1);
+        } else if (type === 'score') {
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(600, audioCtx.currentTime);
+            osc.frequency.setValueAtTime(800, audioCtx.currentTime + 0.08);
+            gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.2);
+        } else if (type === 'hit') {
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(120, audioCtx.currentTime);
+            osc.frequency.linearRampToValueAtTime(40, audioCtx.currentTime + 0.3);
+            gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.3);
+        }
+    } catch(e) {}
+}
+
+function handleAction() {
+    initAudio();
+    if (!dino.isJumping && !gameOver) {
+        dino.vy = dino.jumpForce;
+        dino.isJumping = true;
+        playSound('jump');
+    }
+    if (gameOver) {
+        resetGame();
+    }
+}
+
+window.addEventListener("keydown", (e) => {
+    if (e.code === "Space" || e.code === "ArrowUp") {
+        e.preventDefault();
+        handleAction();
+    }
+});
+
+window.addEventListener("touchstart", (e) => {
+    e.preventDefault();
+    handleAction();
+}, { passive: false });
+
+function spawnObstacle() {
+    frameCount++;
+    if (frameCount > obstacleConfig.nextInterval) {
+        const randomEmoji = obstacleEmojis[Math.floor(Math.random() * obstacleEmojis.length)];
+        obstacles.push({
+            x: canvas.width,
+            y: canvas.height - obstacleConfig.height,
+            width: obstacleConfig.width,
+            height: obstacleConfig.height,
+            emoji: randomEmoji
+        });
+        frameCount = 0;
+        obstacleConfig.nextInterval = Math.floor(Math.random() * 50) + obstacleConfig.minInterval;
+    }
+}
+
+function update() {
+    if (gameOver) return;
+
+    if (invulnerableFrames > 0) {
+        invulnerableFrames--;
+    }
+
+    currentPhase = Math.min(Math.floor(score / 10) + 1, 4);
+
+    // Movimentação das nuvens de fundo
+    for (let cloud of clouds) {
+        cloud.x -= cloud.speed;
+        if (cloud.x + cloud.size < 0) {
+            cloud.x = canvas.width + 20;
+        }
+    }
+
+    dino.vy += dino.gravity;
+    dino.y += dino.vy;
+
+    const groundY = canvas.height - dino.height;
+    if (dino.y > groundY) {
+        dino.y = groundY;
+        dino.vy = 0;
+        dino.isJumping = false;
+    }
+
+    for (let i = obstacles.length - 1; i >= 0; i--) {
+        obstacles[i].x -= gameSpeed;
+
+        if (
+            invulnerableFrames === 0 &&
+            dino.x + 15 < obstacles[i].x + obstacles[i].width &&
+            dino.x + dino.width - 15 > obstacles[i].x &&
+            dino.y + 10 < obstacles[i].y + obstacles[i].height &&
+            dino.y + dino.height > obstacles[i].y
+        ) {
+            playSound('hit');
+            lives--; 
+            
+            if (lives <= 0) {
+                gameOver = true;
+                if (score > highScore) {
+                    highScore = score;
+                    localStorage.setItem("dinoHighScore", highScore);
+                }
+            } else {
+                invulnerableFrames = 90; 
+            }
+        }
+
+        if (!gameOver && obstacles[i].x + obstacles[i].width < 0) {
+            obstacles.splice(i, 1);
+            score++;
+            playSound('score');
+            if (score % 5 === 0) gameSpeed += 0.5;
+        }
+    }
+
+    spawnObstacle();
+}
+
+function draw() {
+    // 1. Desenha o fundo colorido dinâmico da fase atual
+    ctx.fillStyle = faseBackgrounds[currentPhase];
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // 2. Desenha as nuvens decorativas no céu
+    ctx.textBaseline = "top";
+    ctx.textAlign = "left";
+    for (let cloud of clouds) {
+        ctx.font = `${cloud.size}px Arial`;
+        ctx.fillText("☁️", cloud.x, cloud.y);
+    }
+
+    // 3. Desenha a linha de demarcação do chão
+    ctx.strokeStyle = "#535353";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(0, canvas.height);
+    ctx.lineTo(canvas.width, canvas.height);
+    ctx.stroke();
+
+    // 4. Desenha o Mamute Realista da fase atual
+    if (invulnerableFrames === 0 || Math.floor(invulnerableFrames / 5) % 2 === 0) {
+        if (spritesheet.complete && spritesheet.naturalWidth !== 0) {
+            const sprite = mammothFases[currentPhase - 1];
+            ctx.drawImage(
+                spritesheet, 
+                sprite.sx, sprite.sy, sprite.sWidth, sprite.sHeight, 
+                dino.x, dino.y, dino.width, dino.height             
+            );
+        } else {
+            // Se o link falhar ou demorar, mostra um Emoji temporário (Não quebra o jogo!)
+            ctx.font = `${dino.height}px Arial`;
+            ctx.fillText("🦣", dino.x, dino.y);
+        }
+    }
+
+    // 5. Desenha os Obstáculos
+    for (let obs of obstacles) {
+        ctx.font = `${obs.height}px Arial`;
+        ctx.fillText(obs.emoji, obs.x, obs.y);
+    }
+
+    // 6. Painel Superior: Vidas (Esquerda) e Pontuação (Direita)
+    ctx.font = "22px Arial";
+    let hearts = "";
+    for(let i = 0; i < lives; i++) hearts += "❤️";
+    ctx.fillText(hearts, 20, 20);
+
+    ctx.fillStyle = "#535353";
+    ctx.font = "bold 15px Arial";
+    ctx.textAlign = "right";
+    ctx.fillText(`ILHA FASE: ${currentPhase}   HI: ${highScore}   Score: ${score}`, canvas.width - 20, 25);
+
+    // 7. Janela de Game Over
+    if (gameOver) {
+        ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 30px Arial";
+        ctx.textAlign = "center";
+        ctx.fillText("FIM DE JOGO", canvas.width / 2, canvas.height / 2 - 10);
+        ctx.font = "16px Arial";
+        ctx.fillText("Toque na tela ou pressione Espaço para reiniciar", canvas.width / 2, canvas.height / 2 + 25);
+    }
+}
+
+function resetGame() {
+    score = 0;
+    lives = 3; 
+    gameOver = false;
+    gameSpeed = 5;
+    obstacles.length = 0;
+    currentPhase = 1;
+    dino.y = canvas.height - dino.height;
+    dino.vy = 0;
+    frameCount = 0;
+    invulnerableFrames = 0;
+    loop();
+}
+
+function loop() {
+    update();
+    draw();
+    if (!gameOver) {
+        requestAnimationFrame(loop);
+    }
+}
+
+// Inicia o jogo imediatamente
+loop();
+</script>
+</body>
+</html>
+
